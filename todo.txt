@@ -1,0 +1,3 @@
+reset log file when reach 7 mb
+auto startup using registry
+test script if wifi is out
